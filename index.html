@@ -367,9 +367,10 @@ canvas#battleCanvas{border-radius:8px;border:1px solid #333366;display:block;}
       <button class="modal-close" onclick="document.getElementById('chestModal').style.display='none'">✕</button>
       <h2>🎁 获得物品!</h2>
       <div id="chestContent"></div>
-      <div class="modal-btns">
+      <div class="modal-btns" style="flex-wrap:wrap;gap:6px;">
         <button class="modal-btn primary" onclick="equipChestItem()">装备</button>
-        <button class="modal-btn cancel" onclick="keepChestItem()">保存</button>
+        <button class="modal-btn danger" style="background:#884400" onclick="replaceChestItem()">替换</button>
+        <button class="modal-btn cancel" onclick="keepChestItem()">背包</button>
         <button class="modal-btn danger" onclick="dropChestItem()">丢弃</button>
       </div>
     </div>
@@ -966,7 +967,7 @@ function showItemModal(item, isEquipped=false) {
     ${equipped && !isEquipped ? `<div class="compare">已装备: ${equipped.name}<br>${statsToString(equipped.stats)}</div>` : ''}
   `;
   const enhanceLv = item.enhanceLevel || 0;
-  const enhanceCost = 50 + enhanceLv * 60;
+  const enhanceCost = 30 + enhanceLv * 30;
   const enhanceLabel = `⬆ 强化+${enhanceLv+1} (${enhanceCost}💰)`;
   const btns = document.getElementById('itemModalBtns');
   if(isEquipped) {
@@ -1021,23 +1022,27 @@ function enhanceItem(id) {
   // find in inventory OR in equipment
   let item = G.inventory.find(i=>i.id===id);
   if(!item) item = Object.values(G.equipment).find(i=>i&&i.id===id);
+  if(!item) item = Object.values(G.pet.equipment).find(i=>i&&i.id===id);
   if(!item) return;
   const enhanceLv = item.enhanceLevel || 0;
-  const cost = 50 + enhanceLv * 60;
+  const cost = 30 + enhanceLv * 30;
   if(G.gold < cost) { showNotif(`强化需要 ${cost} 金币!`); return; }
   G.gold -= cost;
   item.enhanceLevel = enhanceLv + 1;
-  // boost all stats by 25%
+  // boost all stats by 8%
   Object.keys(item.stats).forEach(k => {
-    item.stats[k] = Math.ceil(item.stats[k] * 1.25);
+    item.stats[k] = Math.ceil(item.stats[k] * 1.08);
   });
   // add +N suffix to name
   item.name = item.name.replace(/\+\d+$/, '') + '+' + item.enhanceLevel;
+  // refresh modal in place instead of closing
+  const isEquipped = !!Object.values(G.equipment).find(i=>i&&i.id===id) ||
+                     !!Object.values(G.pet.equipment).find(i=>i&&i.id===id);
   recomputeStats();
   refreshTopBar();
-  showNotif(`✨ 强化成功! ${item.name}`);
-  closeModal();
-  refreshChar();
+  showNotif(`✨ ${item.name} 强化成功!`);
+  // re-show the updated item modal without closing
+  showItemModal(item, isEquipped);
 }
 
 // ============================================================
@@ -1169,6 +1174,7 @@ function startArenaBattle(idx) {
     enemy: enemy,
     round: 0,
     isArena: true,
+    isTrial: false,
     arenaOppIdx: idx,
     playerStunned: false,
     enemyStunned: false
@@ -2026,9 +2032,11 @@ const BC = {
   },
 
   triggerPlayerAttack(onHit) {
+    const gen = battleGen;
     const targetX = this.canvas.width/2 + 30;
     this.player.tx = targetX;
     setTimeout(()=>{
+      if(battleGen !== gen) return; // stale, new battle started
       if(onHit) onHit();
       this.spawnParticles(this.enemy.x, 110, '#ffaa00', 10);
       this.enemy.flash = 1;
@@ -2038,9 +2046,11 @@ const BC = {
   },
 
   triggerEnemyAttack(onHit) {
+    const gen = battleGen;
     const targetX = this.canvas.width/2 - 60;
     this.enemy.tx = targetX;
     setTimeout(()=>{
+      if(battleGen !== gen) return; // stale
       if(onHit) onHit();
       this.spawnParticles(this.player.x, 110, '#ff4444', 8);
       this.player.flash = 1;
@@ -2064,6 +2074,7 @@ let autoLoopTimeout = null;
 let chestTimeoutId = null;
 let battleEnded = false;
 let roundInProgress = false;
+let battleGen = 0;
 
 function startBattle(zone, isArena) {
   if(!isArena) {
@@ -2076,6 +2087,7 @@ function startBattle(zone, isArena) {
       enemy: enemy,
       round: 0,
       isArena: false,
+      isTrial: false,
       playerStunned: false,
       enemyStunned: false
     };
@@ -2086,6 +2098,7 @@ function startBattle(zone, isArena) {
 function openBattleScreen() {
   battleEnded = false;
   roundInProgress = false;
+  battleGen++;
   if(autoLoopTimeout) { clearTimeout(autoLoopTimeout); autoLoopTimeout = null; }
   if(chestTimeoutId) { clearTimeout(chestTimeoutId); chestTimeoutId = null; }
   document.getElementById('chestModal').style.display = 'none';
@@ -2169,6 +2182,7 @@ function calcDamage(atk, def, crit, dodge, block) {
 async function doRound() {
   if(battleEnded || roundInProgress) return;
   roundInProgress = true;
+  const myGen = battleGen;
   try {
     const b = G.battle;
     const enemy = b.enemy;
@@ -2179,13 +2193,15 @@ async function doRound() {
 
     if(playerFirst) {
       await playerAttackPhase();
-      if(battleEnded) return;
+      if(battleGen !== myGen || battleEnded) return;
       await enemyAttackPhase();
     } else {
       await enemyAttackPhase();
-      if(battleEnded) return;
+      if(battleGen !== myGen || battleEnded) return;
       await playerAttackPhase();
     }
+
+    if(battleGen !== myGen || battleEnded) return;
 
     // pet assist - 50% chance
     if(G.pet.hatched && !battleEnded && G.pet.atk > 0) {
@@ -2206,14 +2222,15 @@ async function doRound() {
       }
     }
 
-    if(!battleEnded) updateBattleBars();
+    if(!battleEnded && battleGen === myGen) updateBattleBars();
   } finally {
-    roundInProgress = false;
+    if(battleGen === myGen) roundInProgress = false;
   }
 }
 
 async function playerAttackPhase() {
   if(battleEnded) return;
+  const myGen = battleGen;
   const b = G.battle;
   const enemy = b.enemy;
 
@@ -2226,6 +2243,7 @@ async function playerAttackPhase() {
   const res = calcDamage(G.atk, enemy.def, G.crit, enemy.dodge, 0);
   await new Promise(resolve=>{
     BC.triggerPlayerAttack(()=>{
+      if(battleGen !== myGen) { resolve(); return; }
       if(res.dodged) {
         addLog(`💨 <span style="color:#4488ff">${enemy.name} 闪避了你的攻击!</span>`);
         BC.spawnFloat(enemy.x||380, 90, '闪避!', '#4488ff', 14);
@@ -2261,14 +2279,16 @@ async function playerAttackPhase() {
       updateBattleBars();
       resolve();
     });
-    setTimeout(resolve, 500);
+    setTimeout(()=>resolve(), 600); // safety timeout
   });
 
+  if(battleGen !== myGen || battleEnded) return;
   if(enemy.hp <= 0) { onBattleWin(); return; }
 }
 
 async function enemyAttackPhase() {
   if(battleEnded) return;
+  const myGen = battleGen;
   const b = G.battle;
   const enemy = b.enemy;
 
@@ -2281,6 +2301,7 @@ async function enemyAttackPhase() {
   const res = calcDamage(enemy.atk, G.def, enemy.crit||0, G.dodge, G.block);
   await new Promise(resolve=>{
     BC.triggerEnemyAttack(()=>{
+      if(battleGen !== myGen) { resolve(); return; }
       if(res.dodged) {
         addLog(`💨 <span style="color:#4488ff">你闪避了 ${enemy.name} 的攻击!</span>`);
         BC.spawnFloat(BC.player.x, 90, '闪避!', '#4488ff', 14);
@@ -2304,9 +2325,10 @@ async function enemyAttackPhase() {
       updateBattleBars();
       resolve();
     });
-    setTimeout(resolve, 500);
+    setTimeout(()=>resolve(), 600); // safety timeout
   });
 
+  if(battleGen !== myGen || battleEnded) return;
   if(G.hp <= 0) { onBattleDeath(); }
 }
 
@@ -2347,12 +2369,18 @@ function onBattleWin() {
   // chest drop: 40% chance OR guaranteed every 5 wins
   let chestDropped = false;
   if(Math.random() < 0.40 || G.wins % 5 === 0) {
-    chestDropped = true;
     const zoneIdx = ZONES.findIndex(z=>z.id===G.battle.zone.id);
     const isPetItem = Math.random() < 0.15;
     const item = generateItem(zoneIdx, isPetItem);
-    pendingChestItem = item;
-    chestTimeoutId = setTimeout(()=>{ chestTimeoutId=null; showChestModal(item); }, 500);
+    if(G.autoExplore) {
+      // auto-handle: compare and equip if better
+      autoHandleItem(item);
+      chestDropped = false; // don't pause for auto-explore
+    } else {
+      chestDropped = true;
+      pendingChestItem = item;
+      chestTimeoutId = setTimeout(()=>{ chestTimeoutId=null; showChestModal(item); }, 500);
+    }
   }
 
   addLog(`💰 获得 ${enemy.gold} 金币 | ✨ 获得 ${enemy.exp} 经验`);
@@ -2473,9 +2501,14 @@ function handleArenaWin() {
   if(Math.random() < 0.30) {
     const zoneIdx = Math.min(7, Math.floor(G.arena.rating / 280));
     const item = generateItem(zoneIdx, false);
-    pendingChestItem = item;
-    chestTimeoutId = setTimeout(()=>{ chestTimeoutId=null; showChestModal(item); }, 600);
-    addLog(`🎁 <span style="color:#aa44ff">竞技场战利品: ${item.name}!</span>`);
+    if(G.autoExplore) {
+      autoHandleItem(item);
+      addLog(`🎁 <span style="color:#aa44ff">竞技场战利品: ${item.name}!</span>`);
+    } else {
+      pendingChestItem = item;
+      chestTimeoutId = setTimeout(()=>{ chestTimeoutId=null; showChestModal(item); }, 600);
+      addLog(`🎁 <span style="color:#aa44ff">竞技场战利品: ${item.name}!</span>`);
+    }
   }
   G.arena.opponents = generateOpponents();
   refreshArena();
@@ -2528,19 +2561,16 @@ function onBattleDeath() {
   addLog(`💀 <span style="color:#ff4466">你已阵亡!</span>`);
 
   if(G.battle.isTrial) {
-    const floor = G.battle.trialFloor - 1;
-    addLog(`💀 <span style="color:#ff88ff">试炼结束! 到达第${floor}层</span>`);
+    const floor = (G.battle.trialFloor || 1) - 1;
+    addLog(`💀 <span style="color:#ff88ff">试炼结束! 通关第${floor}层</span>`);
     if(!G.trial) G.trial = {bestFloor:0};
-    if(floor > (G.trial.bestFloor||0)) {
-      G.trial.bestFloor = floor;
-      saveGame();
-    }
-    handleArenaLoss();
-    setTimeout(()=>{
-      document.getElementById('postBattleBtns').innerHTML = `
-        <button class="battle-btn secondary" onclick="retreatTrial()">返回试炼</button>
-      `;
-    }, 100);
+    if(floor > G.trial.bestFloor) { G.trial.bestFloor = floor; saveGame(); }
+    document.getElementById('mainControls').style.display = 'none';
+    document.getElementById('postBattleBtns').style.display = 'flex';
+    document.getElementById('postBattleBtns').innerHTML = `
+      <button class="battle-btn secondary" onclick="retreatTrial()">返回试炼</button>
+    `;
+    refreshTopBar();
     return;
   }
 
@@ -2588,6 +2618,7 @@ function continueExplore() {
     enemy: enemy,
     round: 0,
     isArena: false,
+    isTrial: false,
     playerStunned: false,
     enemyStunned: false
   };
@@ -2656,12 +2687,12 @@ async function doManualRound() {
 }
 
 async function runAutoLoop() {
+  const myGen = battleGen;
   if(!BC.auto || battleEnded) return;
   await doRound();
-  if(!battleEnded && BC.auto) {
-    const delay_ms = Math.floor(1200 / BC.speed);
-    autoLoopTimeout = setTimeout(runAutoLoop, delay_ms);
-  }
+  if(battleGen !== myGen || !BC.auto || battleEnded) return;
+  const delay_ms = Math.floor(1200 / BC.speed);
+  autoLoopTimeout = setTimeout(runAutoLoop, delay_ms);
 }
 
 function delay(ms) {
@@ -2671,6 +2702,23 @@ function delay(ms) {
 // ============================================================
 // CHEST MODAL
 // ============================================================
+function autoHandleItem(item) {
+  const equipped = item.isPet ? G.pet.equipment[item.slot] : G.equipment[item.slot];
+  // compare main stat
+  const newPower = Object.values(item.stats).reduce((s,v)=>s+v, 0);
+  const oldPower = equipped ? Object.values(equipped.stats).reduce((s,v)=>s+v, 0) : 0;
+  if(newPower > oldPower) {
+    // auto-equip, discard old
+    if(item.isPet) { G.pet.equipment[item.slot] = item; }
+    else { G.equipment[item.slot] = item; }
+    recomputeStats();
+    addLog(`✅ <span style="color:${item.rarityColor}">[自动装备] ${item.name}</span> (替换旧装备)`);
+  } else {
+    G.inventory.push(item);
+    addLog(`📦 <span style="color:${item.rarityColor}">[自动入包] ${item.name}</span>`);
+  }
+}
+
 function showChestModal(item) {
   const modal = document.getElementById('chestModal');
   const equipped = item.isPet ? G.pet.equipment[item.slot] : G.equipment[item.slot];
@@ -2718,6 +2766,22 @@ function equipChestItem() {
   }
   recomputeStats();
   showNotif('装备了 '+item.name);
+  _afterChestDecision();
+}
+
+function replaceChestItem() {
+  document.getElementById('chestModal').style.display='none';
+  if(!pendingChestItem) return;
+  const item = pendingChestItem;
+  pendingChestItem = null;
+  // equip new item, discard old (don't add to inventory)
+  if(item.isPet) {
+    G.pet.equipment[item.slot] = item; // old is discarded
+  } else {
+    G.equipment[item.slot] = item; // old is discarded
+  }
+  recomputeStats();
+  showNotif('替换装备: ' + item.name);
   _afterChestDecision();
 }
 
