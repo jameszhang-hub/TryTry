@@ -854,11 +854,11 @@ function renderCharPreview() {
   const grad = ctx.createLinearGradient(0,0,0,H);
   grad.addColorStop(0,'#1a1a3a'); grad.addColorStop(1,'#0a0a1a');
   ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
-  // ground
-  ctx.fillStyle='#222244'; ctx.fillRect(0,H-22,W,22);
+  // ground — aligned with boots bottom: translate_y + 52*scale = (H-65)+60 = H-5
+  ctx.fillStyle='#222244'; ctx.fillRect(0,H-8,W,8);
   // shadow under feet
-  ctx.fillStyle='#00000044';
-  ctx.beginPath(); ctx.ellipse(W/2, H-22, 22, 5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle='#00000066';
+  ctx.beginPath(); ctx.ellipse(W/2, H-8, 20, 4, 0, 0, Math.PI*2); ctx.fill();
   // draw class sprite centered, scaled up with equipment visuals
   const vis = getEquipmentVisuals();
   if(vis.auraColor) {
@@ -870,7 +870,7 @@ function renderCharPreview() {
     ctx.fillRect(0, 0, W, H);
   }
   ctx.save();
-  ctx.translate(W/2, H-30);
+  ctx.translate(W/2, H-65);  // boots bottom (y=52) at scale 1.15 → 155+60=215, fits in 220
   ctx.scale(1.15, 1.15);
   if(vis.auraColor) { ctx.shadowColor = vis.auraColor; ctx.shadowBlur = vis.auraGlow * 2; }
   BC.drawPlayerSprite(ctx, G.hero, vis.weaponColor, vis.armorColor);
@@ -2740,12 +2740,29 @@ function closeChestModal(e) {
 }
 
 function _afterChestDecision() {
-  // if in auto-explore mode and still in battle screen, continue
   const bs = document.getElementById('battleScreen');
-  if(G.autoExplore && bs && bs.style.display !== 'none' && !G.battle?.isArena) {
+  if(!bs || bs.style.display === 'none') return;
+  // trial: re-show trial-specific continue buttons
+  if(G.battle?.isTrial) {
+    const floor = G.battle.trialFloor || 1;
+    document.getElementById('mainControls').style.display = 'none';
+    document.getElementById('postBattleBtns').style.display = 'flex';
+    document.getElementById('postBattleBtns').innerHTML = `
+      <button class="battle-btn" style="background:linear-gradient(135deg,#660066,#aa00aa);color:#fff;" onclick="continueTrial(${floor+1})">⚡ 第${floor+1}层</button>
+      <button class="battle-btn secondary" onclick="retreatTrial()">🏃 撤退</button>
+    `;
+    return;
+  }
+  // arena: re-show arena buttons
+  if(G.battle?.isArena) {
+    showArenaPostBtns();
+    return;
+  }
+  // normal explore
+  if(G.autoExplore) {
     addLog(`🔄 <span style="color:#44ff88">自动探索中...</span>`);
     autoLoopTimeout = setTimeout(continueExplore, 800);
-  } else if(bs && bs.style.display !== 'none') {
+  } else {
     showPostBattleBtns();
   }
 }
